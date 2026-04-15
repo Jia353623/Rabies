@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gurugram Rabies Risk Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    body { margin:0; font-family:system-ui,sans-serif; display:flex; flex-direction:column; height:100vh; }
+    header { padding:10px 16px; background:#111827; color:#f9fafb; }
+    header h1 { margin:4px 0; font-size:20px; }
+    header p { margin:2px 0; font-size:13px; color:#9ca3af; }
+    #content { display:flex; flex:1; min-height:0; }
+    #map { flex:2; min-height:300px; }
+    #sidebar { flex:1; padding:12px; background:#f3f4f6; overflow-y:auto; font-size:14px; border-left:1px solid #e5e7eb; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; padding:6px 10px; border-radius:6px; font-size:13px; border:none; cursor:pointer; margin-right:4px; }
+    .btn-primary { background:#2563eb; color:white; }
+    .btn-secondary { background:#6b7280; color:white; }
+    .btn:disabled { background:#9ca3af; cursor:default; }
+    .status { margin-top:8px; font-size:12px; color:#4b5563; }
+    .alert-box { margin-top:10px; padding:8px 10px; border-radius:6px; font-size:13px; display:none; }
+    .alert-high { background:#fef2f2; border:1px solid:#fecaca; color:#b91c1c; }
+    .alert-ok { background:#ecfdf3; border:1px solid:#bbf7d0; color:#166534; }
+    @media (max-width:900px){ #content{flex-direction:column;} #map{height:50vh;} #sidebar{border-left:none;border-top:1px solid #e5e7eb;} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Gurugram Rabies Risk Map</h1>
+    <p>Shows stray dog risk using dog bite reports, stray clusters, open garbage areas & local conflicts;</p>
+  </header>
+
+  <div id="content">
+    <div id="map"></div>
+
+    <aside id="sidebar">
+      <h2 style="margin:0 0 6px;font-size:16px;">Live alerts</h2>
+      <p style="margin:0 0 6px;font-size:13px;">
+        Step 1: Enable notifications. Step 2: Check your location. If you’re in a high-risk zone,
+        a system-style notification will pop up like on Google Maps.
+      </p>
+      <button id="notifyBtn" class="btn btn-secondary">Enable alerts</button>
+      <button id="locBtn" class="btn btn-primary">Check my location</button>
+      <div id="status" class="status"></div>
+      <div id="alert" class="alert-box"></div>
+
+      <p style="margin-top:10px;font-size:12px;color:#6b7280;">
+        Works best over HTTPS (or localhost) on Chrome/Edge/Android. iOS support for web push is limited.
+      </p>
+    </aside>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script>
+    // --- MAP SETUP (same coords logic as previous version, simplified) ---
+    const map = L.map("map").setView([28.4389, 77.0059], 12);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+
+    const sector83 = [28.3981, 76.9733];
+    const sector56Jalvayu = [28.425651, 77.099613];
+    const golfCourseRd = [28.438711, 77.102992];
+    const mianwaliColony = [28.464, 76.995];
+    const civilHospital = [28.4605, 76.9985];
+
+    function squareAround([lat, lng], dLat, dLng) {
+      return [
+        [lat + dLat, lng - dLng],
+        [lat + dLat, lng + dLng],
+        [lat - dLat, lng + dLng],
+        [lat - dLat, lng - dLng],
+      ];
+    }
+
+    const highRiskZones = [
+      {
+        name: "Sector 83 (G-21 side)",
+        coords: sector83,
+        polygon: squareAround(sector83, 0.005, 0.006),
+      },
+      {
+        name: "Sector 56 – Jalvayu Towers",
+        coords: sector56Jalvayu,
+        polygon: squareAround(sector56Jalvayu, 0.004, 0.005),
+      },
+      {
+        name: "Golf Course Road & junctions",
+        coords: golfCourseRd,
+        polygon: squareAround(golfCourseRd, 0.004, 0.006),
+      },
+      {
+        name: "Mianwali / old city belt",
+        coords: mianwaliColony,
+        polygon: squareAround(mianwaliColony, 0.006, 0.006),
+      },
+      {
+        name: "Civil Hospital hub (Sector 10)",
+        coords: civilHospital,
+        polygon: squareAround(civilHospital, 0.004, 0.004),
+      },
+    ];
+
+    const leafletZones = [];
+
+    highRiskZones.forEach((z) => {
+      const poly = L.polygon(z.polygon, {
+        color: "#b91c1c",
+        weight: 2,
+        fillColor: "#ef4444",
+        fillOpacity: 0.4,
+      }).addTo(map);
+      poly.bindPopup(`<strong>${z.name}</strong><br>High rabies risk.`);
+      leafletZones.push({ ...z, polygon: poly });
+    });
+
+    const allBounds = L.featureGroup(leafletZones.map((z) => z.polygon)).getBounds();
+    map.fitBounds(allBounds, { padding: [20, 20] });
+
+    // --- NOTIFICATION + GEOFENCING LOGIC ---
+    const notifyBtn = document.getElementById("notifyBtn");
+    const locBtn = document.getElementById("locBtn");
+    const statusEl = document.getElementById("status");
+    const alertEl = document.getElementById("alert");
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function showAlert(message, isHigh) {
+      alertEl.style.display = "block";
+      alertEl.textContent = message;
+      alertEl.className = isHigh ? "alert-box alert-high" : "alert-box alert-ok";
+    }
+    function hideAlert() { alertEl.style.display = "none"; alertEl.textContent = ""; }
+
+    // Register service worker for push-style notifications
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").then(() => {
+        console.log("Service worker registered");
+      }).catch(console.error);
+    }
+
+    // Step 1: Ask for notification permission
+    notifyBtn.addEventListener("click", async () => {
+      if (!("Notification" in window)) {
+        setStatus("Notifications not supported on this device/browser.");
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission === "granted") {
+        setStatus("Notifications enabled. Now tap 'Check my location'.");
+        notifyBtn.disabled = true;
+      } else {
+        setStatus("Notification permission denied or dismissed.");
+      }
+    });
+
+    function checkRisk(lat, lng) {
+      const point = L.latLng(lat, lng);
+      for (const zone of leafletZones) {
+        if (zone.polygon.getBounds().contains(point)) return zone;
+      }
+      return null;
+    }
+
+    // Helper: show a system notification via service worker
+    function triggerSystemNotification(title, body) {
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      if (!navigator.serviceWorker || !navigator.serviceWorker.ready) return;
+      navigator.serviceWorker.ready.then((reg) => {
+        reg.showNotification(title, {
+          body,
+          icon: "https://maps.gstatic.com/tactile/pane/default_geocode-1x.png",
+          vibrate: [200, 100, 200],
+        });
+      });
+    }
+
+    locBtn.addEventListener("click", () => {
+      hideAlert();
+      if (!navigator.geolocation) {
+        setStatus("Geolocation is not supported by this browser.");
+        return;
+      }
+      locBtn.disabled = true;
+      setStatus("Locating you…");
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          setStatus(`You: ${lat.toFixed(4)}, ${lng.toFixed(4)} (±${Math.round(pos.coords.accuracy)} m)`);
+
+          const marker = L.circleMarker([lat, lng], {
+            radius: 6,
+            color: "#1d4ed8",
+            fillColor: "#3b82f6",
+            fillOpacity: 0.9,
+          }).addTo(map);
+          marker.bindPopup("You are here (approx).").openPopup();
+          map.setView([lat, lng], 15);
+
+          const zone = checkRisk(lat, lng);
+          if (zone) {
+            const msg = `High rabies risk area: ${zone.name}. Stay cautious around stray dogs, avoid provoking them, and seek medical help after any bite or scratch.`;
+            showAlert(msg, true);
+            // System-style popup like Google Maps:
+            triggerSystemNotification("High rabies risk nearby", msg);
+          } else {
+            const msg = "You are outside marked high-risk zones. Still stay cautious around unfamiliar dogs.";
+            showAlert(msg, false);
+            triggerSystemNotification("Stray dog safety", msg);
+          }
+
+          locBtn.disabled = false;
+        },
+        (err) => {
+          console.error(err);
+          if (err.code === err.PERMISSION_DENIED) {
+            setStatus("Location permission denied. You can still move the map manually.");
+          } else {
+            setStatus("Unable to get your location. Please try again.");
+          }
+          locBtn.disabled = false;
+        },
+        { enableHighAccuracy:true, timeout:10000, maximumAge:0 }
+      );
+    });
+  </script>
+</body>
+</html>
